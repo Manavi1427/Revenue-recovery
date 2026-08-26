@@ -1,6 +1,6 @@
 .env
 .env.*
-!.env.example
+
 
 # Python virtual environments
 .venv/
@@ -9,3 +9,6 @@ venv/
 # Local development server logs
 *.stdout.log
 *.stderr.log
+
+#file packages
+*alembic.ini

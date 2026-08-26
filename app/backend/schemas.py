@@ -1,0 +1,144 @@
+
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from database import RecoveryStatus
+
+
+class PaymentEventBase(BaseModel):
+    """Normalized payment-event data shared by create and read schemas."""
+
+    event_id: str
+    event_type: str
+    payment_id: str | None = None
+    order_id: str | None = None
+    amount: int | None = Field(default=None, ge=0)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    payment_method: str | None = None
+    error_code: str | None = None
+    error_source: str | None = None
+    error_step: str | None = None
+    error_reason: str | None = None
+    error_description: str | None = None
+    normalized_payload: dict[str, Any] = Field(default_factory=dict)
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
+    occurred_at: datetime
+
+
+class PaymentEventCreate(PaymentEventBase):
+    """Data accepted when storing a normalized webhook event."""
+
+
+class PaymentEventRead(PaymentEventBase):
+    """Payment-event data returned from the database."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    recovery_case_id: str | None = None
+    received_at: datetime
+
+
+class RecoveryCaseBase(BaseModel):
+    """Editable business data shared by recovery-case schemas."""
+
+    payment_id: str | None = None
+    order_id: str | None = None
+    amount: int = Field(ge=0)
+    currency: str = Field(default="INR", min_length=3, max_length=3)
+    diagnosis: str | None = None
+    recoverability_score: float | None = Field(default=None, ge=0, le=1)
+    recommended_action: str | None = None
+
+
+class RecoveryCaseCreate(RecoveryCaseBase):
+    """Data accepted when opening a recovery case."""
+
+    status: RecoveryStatus = RecoveryStatus.DETECTED
+
+
+class RecoveryCaseUpdate(BaseModel):
+    """Fields that may be changed on an existing recovery case."""
+
+    diagnosis: str | None = None
+    recoverability_score: float | None = Field(default=None, ge=0, le=1)
+    recommended_action: str | None = None
+    status: RecoveryStatus | None = None
+    closed_at: datetime | None = None
+
+
+class RecoveryCaseRead(RecoveryCaseBase):
+    """Flat recovery-case data returned from the database."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    status: RecoveryStatus
+    opened_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None = None
+
+
+class InterventionBase(BaseModel):
+    """Recovery-action data shared by create and read schemas."""
+
+    action_type: str
+    channel: str | None = None
+    action_payload: dict[str, Any] = Field(default_factory=dict)
+    result_payload: dict[str, Any] | None = None
+    scheduled_at: datetime | None = None
+    executed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    successful: bool | None = None
+    cost: int | None = Field(default=None, ge=0)
+
+
+class InterventionCreate(InterventionBase):
+    """Data accepted when creating an intervention."""
+
+    recovery_case_id: str
+
+
+class InterventionUpdate(BaseModel):
+    """Fields that may be changed on an existing intervention."""
+
+    scheduled_at: datetime | None = None
+    executed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    successful: bool | None = None
+    result_payload: dict[str, Any] | None = None
+
+
+class InterventionRead(InterventionBase):
+    """Intervention data returned from the database."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    recovery_case_id: str
+    created_at: datetime
+
+
+class AuditLogCreate(BaseModel):
+    """Data accepted when appending an audit-log entry."""
+
+    recovery_case_id: str
+    payment_event_id: str | None = None
+    action: str
+    actor: str = "SYSTEM"
+    message: str | None = None
+    previous_status: RecoveryStatus | None = None
+    new_status: RecoveryStatus | None = None
+    decision_data: dict[str, Any] = Field(default_factory=dict)
+    policy_checks: dict[str, Any] = Field(default_factory=dict)
+
+
+class AuditLogRead(AuditLogCreate):
+    """Audit-log data returned from the database."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    created_at: datetime
