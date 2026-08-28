@@ -271,10 +271,24 @@ class AuditLog(Base):
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     previous_status: Mapped[RecoveryStatus | None] = mapped_column(
-        recovery_status_type, nullable=True
+        Enum(
+            RecoveryStatus,
+            name="ck_audit_logs_previous_status",
+            native_enum=False,
+            create_constraint=True,
+            validate_strings=True,
+        ),
+        nullable=True,
     )
     new_status: Mapped[RecoveryStatus | None] = mapped_column(
-        recovery_status_type, nullable=True
+        Enum(
+            RecoveryStatus,
+            name="ck_audit_logs_new_status",
+            native_enum=False,
+            create_constraint=True,
+            validate_strings=True,
+        ),
+        nullable=True,
     )
     decision_data: Mapped[dict[str, Any]] = mapped_column(
         JSON, default=dict, nullable=False
