@@ -5,6 +5,9 @@
 # Python virtual environments
 .venv/
 venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
 # Local development server logs
 *.stdout.log
