@@ -22,7 +22,7 @@ def test_failed_event_is_atomic_and_idempotent(db):
     assert db.scalar(select(func.count()).select_from(PaymentEvent)) == 1
     assert db.scalar(select(func.count()).select_from(RecoveryCase)) == 1
     logs = db.scalars(select(AuditLog).order_by(AuditLog.created_at)).all()
-    assert [log.action for log in logs] == ["CASE_CREATED", "PAYMENT_DIAGNOSED"]
+    assert [log.action for log in logs] == ["CASE_CREATED", "PAYMENT_DIAGNOSED", "RECOVERY_SCORED"]
     assert logs[0].previous_status is None
     assert logs[0].new_status == RecoveryStatus.DETECTED
 
@@ -31,6 +31,7 @@ def test_unknown_failure_goes_to_human_review(db):
     payment = {**failed_payment(), "id": "pay_unknown", "error_reason": "mystery"}
     case = process_failed_payment(db, "evt_unknown", "payment.failed", payment, {})
     assert case.status == RecoveryStatus.HUMAN_REVIEW
+    assert case.recoverability_score is not None
 
 
 def test_success_recovers_and_applies_stopping_rule(db):

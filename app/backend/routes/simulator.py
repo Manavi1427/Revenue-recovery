@@ -49,6 +49,7 @@ def simulate_failure(
         "case_status": case.status,
         "diagnosis": case.diagnosis,
         "recommended_action": case.recommended_action,
+        "recoverability_score": case.recoverability_score,
     }
 
 

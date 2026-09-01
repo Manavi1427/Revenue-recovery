@@ -142,3 +142,15 @@ class AuditLogRead(AuditLogCreate):
 
     id: str
     created_at: datetime
+
+
+class ScoringResponse(BaseModel):
+    """Safe API representation of one recovery scoring decision."""
+
+    case_id: str
+    final_score: float = Field(ge=0, le=1)
+    source: str
+    rule_score: float = Field(ge=0, le=1)
+    ml_score: float | None = Field(default=None, ge=0, le=1)
+    model_version: str | None = None
+    explanation: list[str]

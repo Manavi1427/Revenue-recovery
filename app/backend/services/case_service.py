@@ -6,6 +6,12 @@ from sqlalchemy.orm import Session
 
 from database import AuditLog, Intervention, PaymentEvent, RecoveryCase, RecoveryStatus
 from services.diagnosis_service import diagnose_payment_failure
+from services.scoring_service import score_recovery_case
+
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 def _event_time(payment_data: dict[str, Any], raw_payload: dict[str, Any]) -> datetime:
@@ -114,6 +120,13 @@ def process_failed_payment(
         ))
         db.commit()
         db.refresh(case)
+        # Diagnosis is durable even if an unforeseen scoring persistence error occurs.
+        try:
+            score_recovery_case(db, case)
+        except Exception as exc:
+            db.rollback()
+            logger.warning("Recovery scoring failed after diagnosis: %s", type(exc).__name__)
+            db.refresh(case)
         return case
     except Exception:
         db.rollback()
