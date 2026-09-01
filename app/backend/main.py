@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routes import cases, metrics, scoring, simulator, webhooks
+from routes import cases, evaluations, metrics, scoring, simulator, webhooks
 
 
 
@@ -35,3 +35,4 @@ app.include_router(cases.router)
 app.include_router(simulator.router)
 app.include_router(metrics.router)
 app.include_router(scoring.router)
+app.include_router(evaluations.router)

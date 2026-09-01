@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from database import RecoveryStatus
+from services.recovery_actions import RecoveryAction
 
 
 class PaymentEventBase(BaseModel):
@@ -154,3 +155,46 @@ class ScoringResponse(BaseModel):
     ml_score: float | None = Field(default=None, ge=0, le=1)
     model_version: str | None = None
     explanation: list[str]
+
+
+class DecisionResponse(BaseModel):
+    selected_action: RecoveryAction
+    recoverability_score: float = Field(ge=0, le=1)
+    expected_recovery_value: int
+    operational_cost: int
+    fatigue_penalty: int
+    risk_penalty: int
+    utility: int
+    explanation: list[str]
+    candidate_actions: list[RecoveryAction]
+    decision_version: str
+
+
+class PolicyResponse(BaseModel):
+    allowed: bool
+    checks: dict[str, bool]
+    denial_reason: str | None
+    resulting_status: RecoveryStatus
+    requires_human_review: bool
+    policy_version: str
+
+
+class InterventionSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    action_type: RecoveryAction
+    channel: str | None
+    scheduled_at: datetime | None
+    executed_at: datetime | None
+    cancelled_at: datetime | None
+
+
+class EvaluationResponse(BaseModel):
+    case_id: str
+    case_status: RecoveryStatus
+    recoverability_score: float = Field(ge=0, le=1)
+    score_source: str
+    decision: DecisionResponse
+    policy: PolicyResponse
+    intervention: InterventionSummary | None
