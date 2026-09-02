@@ -198,3 +198,38 @@ class EvaluationResponse(BaseModel):
     decision: DecisionResponse
     policy: PolicyResponse
     intervention: InterventionSummary | None
+
+
+class PaymentLinkResponse(BaseModel):
+    payment_link_id: str
+    reference_id: str
+    short_url: str
+    status: str
+    created_at: datetime
+
+
+class RecoveryMessageResponse(BaseModel):
+    title: str
+    body: str
+    cta_label: str
+    payment_url: str
+    language: str
+    source: str
+
+
+class InterventionExecutionResponse(BaseModel):
+    case_id: str
+    case_status: RecoveryStatus
+    intervention_id: str
+    action_type: RecoveryAction
+    provider: str
+    mode: str
+    payment_link: PaymentLinkResponse
+    message: RecoveryMessageResponse
+    idempotent_replay: bool
+
+
+class RazorpayIntegrationStatusResponse(BaseModel):
+    mode: str
+    configured: bool
+    payment_link_execution_available: bool
