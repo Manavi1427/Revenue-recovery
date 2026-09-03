@@ -1,0 +1,8 @@
+import type { ReactNode } from "react";
+import { statusConfig } from "@/lib/status";
+import type { RecoveryStatus } from "@/types/recovery";
+export function PageContainer({ children }: { children: ReactNode }) { return <main className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 lg:px-10 lg:py-8">{children}</main>; }
+export function Card({ children, className = "" }: { children: ReactNode; className?: string }) { return <section className={`rounded-2xl border border-[#e5e2dc] bg-white p-5 shadow-[0_1px_2px_rgba(30,25,20,.03)] ${className}`}>{children}</section>; }
+export function StatusBadge({ status }: { status: RecoveryStatus }) { const item = statusConfig[status]; return <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${item.className}`}>{item.label}</span>; }
+export function Skeleton({ className = "h-5 w-full" }: { className?: string }) { return <div aria-hidden="true" className={`animate-pulse rounded-lg bg-slate-200 ${className}`} />; }
+export function Button({ children, variant = "primary", className = "", ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "danger" }) { const styles = variant === "primary" ? "bg-[#5b3ee4] text-white hover:bg-[#4d32cc]" : variant === "danger" ? "bg-red-600 text-white hover:bg-red-700" : "border border-[#ddd8cf] bg-white text-[#29262f] hover:bg-[#f7f6f3]"; return <button {...props} className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${styles} ${className}`}>{children}</button>; }

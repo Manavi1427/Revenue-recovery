@@ -185,9 +185,14 @@ class InterventionSummary(BaseModel):
     id: str
     action_type: RecoveryAction
     channel: str | None
+    action_payload: dict[str, Any]
+    result_payload: dict[str, Any] | None
     scheduled_at: datetime | None
     executed_at: datetime | None
     cancelled_at: datetime | None
+    successful: bool | None
+    cost: int | None
+    created_at: datetime
 
 
 class EvaluationResponse(BaseModel):

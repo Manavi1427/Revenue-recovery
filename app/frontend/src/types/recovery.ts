@@ -1,0 +1,14 @@
+export type RecoveryStatus = "DETECTED" | "DIAGNOSED" | "ACTION_SCHEDULED" | "CONTACTED" | "RECOVERED" | "EXHAUSTED" | "SUPPRESSED" | "HUMAN_REVIEW";
+export interface RecoveryCase { id: string; payment_id: string | null; order_id: string | null; amount: number; currency: string; diagnosis: string | null; recoverability_score: number | null; recommended_action: string | null; status: RecoveryStatus; opened_at: string; updated_at: string; closed_at: string | null; }
+export interface Overview { total_cases: number; active_cases: number; recovered_cases: number; money_at_risk: number; recovered_amount: number; }
+export interface IntegrationStatus { mode: string; configured: boolean; payment_link_execution_available: boolean; }
+export interface ScoringResponse { case_id: string; final_score: number; source: string; rule_score: number; ml_score: number | null; model_version: string | null; explanation: string[]; }
+export interface Decision { selected_action: string; recoverability_score: number; expected_recovery_value: number; operational_cost: number; fatigue_penalty: number; risk_penalty: number; utility: number; explanation: string[]; candidate_actions: string[]; decision_version: string; }
+export interface Policy { allowed: boolean; checks: Record<string, boolean>; denial_reason: string | null; resulting_status: RecoveryStatus; requires_human_review: boolean; policy_version: string; }
+export interface Intervention { id: string; action_type: string; channel: string | null; action_payload: Record<string, unknown>; result_payload: Record<string, unknown> | null; scheduled_at: string | null; executed_at: string | null; cancelled_at: string | null; successful: boolean | null; cost: number | null; created_at: string; }
+export interface EvaluationResponse { case_id: string; case_status: RecoveryStatus; recoverability_score: number; score_source: string; decision: Decision; policy: Policy; intervention: Intervention | null; }
+export interface PaymentLink { payment_link_id: string; reference_id: string; short_url: string; status: string; created_at: string; }
+export interface RecoveryMessage { title: string; body: string; cta_label: string; payment_url: string; language: string; source: string; }
+export interface ExecutionResponse { case_id: string; case_status: RecoveryStatus; intervention_id: string; action_type: string; provider: string; mode: string; payment_link: PaymentLink; message: RecoveryMessage; idempotent_replay: boolean; }
+export interface AuditLog { id: string; recovery_case_id: string; payment_event_id: string | null; action: string; actor: string; message: string | null; previous_status: RecoveryStatus | null; new_status: RecoveryStatus | null; decision_data: Record<string, unknown>; policy_checks: Record<string, unknown>; created_at: string; }
+export interface SimulationResponse { payment_id: string; case_id: string; case_status: RecoveryStatus; }

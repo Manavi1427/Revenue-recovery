@@ -12,7 +12,7 @@ load_dotenv()
 
 app = FastAPI(title="RecoverIQ API")
 
-frontend_url = os.getenv("FRONTEND_URL")
+frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000") or "http://localhost:3000"
 
 app.add_middleware(
     CORSMiddleware,
