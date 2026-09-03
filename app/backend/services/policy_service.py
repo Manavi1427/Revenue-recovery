@@ -24,6 +24,35 @@ class PolicyResult:
     policy_version: str = POLICY_VERSION
 
 
+@dataclass(frozen=True)
+class PaymentHealthPolicyResult:
+    original_action: RecoveryAction
+    final_action: RecoveryAction
+    affected: bool
+    reason: str
+
+
+def apply_payment_health_policy(
+    action: RecoveryAction, method_status: str | None
+) -> PaymentHealthPolicyResult:
+    """Replace only unsuitable same-method retry actions when degraded."""
+
+    if method_status != "DEGRADED":
+        return PaymentHealthPolicyResult(
+            action, action, False,
+            "Payment Health suppression was not required.",
+        )
+    if action not in {RecoveryAction.IMMEDIATE_RETRY, RecoveryAction.RETRY_LATER}:
+        return PaymentHealthPolicyResult(
+            action, action, False,
+            "The selected action does not depend on retrying the degraded method.",
+        )
+    return PaymentHealthPolicyResult(
+        action, RecoveryAction.SUGGEST_ALTERNATIVE_METHOD, True,
+        "Same-method retry suppressed because the payment method is degraded.",
+    )
+
+
 def evaluate_policy(
     *,
     case_status: RecoveryStatus,
@@ -32,6 +61,7 @@ def evaluate_policy(
     amount: int,
     intervention_count: int,
     duplicate_pending: bool,
+    experiment_group: str | None = None,
 ) -> PolicyResult:
     """Apply financial-safety policy without calling ML or the database."""
 
@@ -54,11 +84,18 @@ def evaluate_policy(
         "no_duplicate_intervention": not duplicate_pending,
         "high_value_review_not_required": int(amount) < HIGH_VALUE_REVIEW_THRESHOLD,
     }
+    if experiment_group is not None:
+        checks["case_is_not_holdout"] = experiment_group != "HOLDOUT"
 
     if case_status == RecoveryStatus.RECOVERED:
         return PolicyResult(False, checks, "Case is already recovered", RecoveryStatus.RECOVERED, False)
     if case_status in {RecoveryStatus.EXHAUSTED, RecoveryStatus.SUPPRESSED}:
         return PolicyResult(False, checks, "Case is terminal or suppressed", case_status, False)
+    if experiment_group == "HOLDOUT":
+        return PolicyResult(
+            False, checks, "Holdout cases cannot receive recovery interventions",
+            case_status, False,
+        )
     if not approved:
         return PolicyResult(False, checks, "Action is not in the approved allowlist", RecoveryStatus.HUMAN_REVIEW, True)
     if action == RecoveryAction.STOP_CASE:

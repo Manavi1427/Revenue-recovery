@@ -37,6 +37,8 @@ def _new_event(
     event_type: str,
     payment_data: dict[str, Any],
     raw_payload: dict[str, Any],
+    simulated_at: datetime | None = None,
+    batch_id: str | None = None,
 ) -> PaymentEvent:
     normalized = {
         key: payment_data.get(key)
@@ -48,6 +50,7 @@ def _new_event(
     return PaymentEvent(
         event_id=event_id,
         event_type=event_type,
+        batch_id=batch_id,
         payment_id=payment_data.get("id"),
         order_id=payment_data.get("order_id"),
         amount=payment_data.get("amount"),
@@ -60,7 +63,7 @@ def _new_event(
         error_description=payment_data.get("error_description"),
         normalized_payload=normalized,
         raw_payload=raw_payload,
-        occurred_at=_event_time(payment_data, raw_payload),
+        occurred_at=simulated_at or _event_time(payment_data, raw_payload),
     )
 
 
@@ -70,6 +73,10 @@ def process_failed_payment(
     event_type: str,
     payment_data: dict[str, Any],
     raw_payload: dict[str, Any],
+    *,
+    simulated_at: datetime | None = None,
+    commit_changes: bool = True,
+    batch_id: str | None = None,
 ) -> RecoveryCase:
     existing = db.scalar(select(PaymentEvent).where(PaymentEvent.event_id == event_id))
     if existing:
@@ -79,7 +86,9 @@ def process_failed_payment(
         return case
 
     try:
-        event = _new_event(event_id, event_type, payment_data, raw_payload)
+        event = _new_event(
+            event_id, event_type, payment_data, raw_payload, simulated_at, batch_id
+        )
         db.add(event)
         db.flush()
 
@@ -88,9 +97,11 @@ def process_failed_payment(
             case = RecoveryCase(
                 payment_id=event.payment_id,
                 order_id=event.order_id,
+                payment_method=event.payment_method,
                 amount=event.amount or 0,
                 currency=event.currency or "INR",
                 status=RecoveryStatus.DETECTED,
+                opened_at=simulated_at or datetime.now(timezone.utc),
             )
             db.add(case)
             db.flush()
@@ -118,11 +129,14 @@ def process_failed_payment(
             new_status=case.status,
             decision_data={"recommended_action": case.recommended_action},
         ))
-        db.commit()
+        if commit_changes:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(case)
         # Diagnosis is durable even if an unforeseen scoring persistence error occurs.
         try:
-            score_recovery_case(db, case)
+            score_recovery_case(db, case, commit_changes=commit_changes)
         except Exception as exc:
             db.rollback()
             logger.warning("Recovery scoring failed after diagnosis: %s", type(exc).__name__)
@@ -139,27 +153,39 @@ def process_successful_payment(
     event_type: str,
     payment_data: dict[str, Any],
     raw_payload: dict[str, Any],
+    *,
+    simulated_at: datetime | None = None,
+    commit_changes: bool = True,
+    batch_id: str | None = None,
 ) -> RecoveryCase | None:
     existing = db.scalar(select(PaymentEvent).where(PaymentEvent.event_id == event_id))
     if existing:
         return existing.recovery_case
 
     try:
-        event = _new_event(event_id, event_type, payment_data, raw_payload)
+        event = _new_event(
+            event_id, event_type, payment_data, raw_payload, simulated_at, batch_id
+        )
         db.add(event)
         db.flush()
         case = _find_case(db, event.payment_id, event.order_id)
         if case is None:
-            db.commit()
+            if commit_changes:
+                db.commit()
+            else:
+                db.flush()
             return None
 
         event.recovery_case = case
         if case.status == RecoveryStatus.RECOVERED:
-            db.commit()
+            if commit_changes:
+                db.commit()
+            else:
+                db.flush()
             return case
 
         previous_status = case.status
-        now = datetime.now(timezone.utc)
+        now = simulated_at or datetime.now(timezone.utc)
         case.status = RecoveryStatus.RECOVERED
         case.closed_at = now
         pending = db.scalars(select(Intervention).where(
@@ -179,7 +205,10 @@ def process_successful_payment(
             decision_data={"cancelled_interventions": len(pending)},
             policy_checks={"stopping_rule_applied": True},
         ))
-        db.commit()
+        if commit_changes:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(case)
         return case
     except Exception:

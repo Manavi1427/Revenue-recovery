@@ -50,6 +50,14 @@ class RecoveryStatus(str, PythonEnum):
     HUMAN_REVIEW = "HUMAN_REVIEW"
 
 
+class ExperimentGroup(str, PythonEnum):
+    """Persistent assignment for simulated treatment-effect experiments."""
+
+    TREATMENT = "TREATMENT"
+    HOLDOUT = "HOLDOUT"
+    INELIGIBLE = "INELIGIBLE"
+
+
 recovery_status_type = Enum(
     RecoveryStatus,
     name="recovery_status",
@@ -81,6 +89,15 @@ class RecoveryCase(Base):
     )
     order_id: Mapped[str | None] = mapped_column(
         String(100), index=True, nullable=True
+    )
+    payment_method: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    batch_id: Mapped[str | None] = mapped_column(
+        String(64), index=True, nullable=True
+    )
+    experiment_group: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
     )
 
     # Store monetary amounts in the smallest currency unit (for example, paise).
@@ -143,6 +160,7 @@ class PaymentEvent(Base):
         String(100), unique=True, index=True, nullable=False
     )
     event_type: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
+    batch_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
 
     payment_id: Mapped[str | None] = mapped_column(
         String(100), index=True, nullable=True

@@ -11,8 +11,11 @@ router = APIRouter(prefix="/cases", tags=["cases"])
 
 
 @router.get("", response_model=list[RecoveryCaseRead])
-def list_cases(db: Session = Depends(get_db)):
-    return db.scalars(select(RecoveryCase).order_by(RecoveryCase.opened_at.desc())).all()
+def list_cases(batch_id: str | None = None, db: Session = Depends(get_db)):
+    statement = select(RecoveryCase)
+    if batch_id is not None:
+        statement = statement.where(RecoveryCase.batch_id == batch_id)
+    return db.scalars(statement.order_by(RecoveryCase.opened_at.desc())).all()
 
 
 @router.get("/{case_id}", response_model=RecoveryCaseRead)

@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from database import RecoveryStatus
+from database import ExperimentGroup, RecoveryStatus
 from services.recovery_actions import RecoveryAction
 
 
@@ -47,11 +47,14 @@ class RecoveryCaseBase(BaseModel):
 
     payment_id: str | None = None
     order_id: str | None = None
+    payment_method: str | None = None
     amount: int = Field(ge=0)
     currency: str = Field(default="INR", min_length=3, max_length=3)
     diagnosis: str | None = None
     recoverability_score: float | None = Field(default=None, ge=0, le=1)
     recommended_action: str | None = None
+    batch_id: str | None = None
+    experiment_group: ExperimentGroup | None = None
 
 
 class RecoveryCaseCreate(RecoveryCaseBase):
@@ -238,3 +241,78 @@ class RazorpayIntegrationStatusResponse(BaseModel):
     mode: str
     configured: bool
     payment_link_execution_available: bool
+
+
+class DemoBatchRequest(BaseModel):
+    seed: int = 42
+    batch_size: int = Field(default=100, ge=1, le=500)
+    treatment_percent: int = Field(default=80, ge=0, le=100)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class OverviewMetricsResponse(BaseModel):
+    """Rates are decimals: 0.42 means 42%, and lift is percentage-point lift."""
+
+    batch_id: str | None = None
+    total_cases: int
+    active_cases: int
+    eligible_cases: int
+    treatment_cases: int
+    holdout_cases: int
+    ineligible_cases: int
+    money_at_risk: int
+    initial_money_at_risk: int
+    recovered_amount: int
+    outstanding_amount: int
+    gross_recovery_rate: float | None
+    treatment_recovery_rate: float | None
+    holdout_recovery_rate: float | None
+    incremental_lift: float | None
+    average_recovery_time_seconds: float | None
+    interventions_attempted: int
+    suppressed_interventions: int
+    recovered_cases: int
+    treatment_recovered_cases: int
+    holdout_recovered_cases: int
+
+
+class DemoBatchResponse(BaseModel):
+    batch_id: str
+    seed: int
+    requested_cases: int
+    created_cases: int
+    treatment_cases: int
+    holdout_cases: int
+    ineligible_cases: int
+    recovered_cases: int
+    interventions_attempted: int
+    suppressed_interventions: int
+    status: str
+    simulated: bool = True
+    metrics: OverviewMetricsResponse
+    idempotent_replay: bool
+
+
+class PaymentMethodHealth(BaseModel):
+    payment_method: str
+    status: str
+    total_attempts: int
+    failed_attempts: int
+    observed_failure_rate: float | None
+    baseline_failure_rate: float | None
+    threshold: float
+    degradation_limit: float | None
+    recommended_action: str | None
+    reminders_suppressed: bool
+    reason: str
+
+
+class PaymentHealthResponse(BaseModel):
+    batch_id: str | None
+    window_start: datetime | None
+    window_end: datetime | None
+    overall_status: str
+    degraded_methods: list[str]
+    methods: list[PaymentMethodHealth]
+    generated_at: datetime
+    simulated: bool

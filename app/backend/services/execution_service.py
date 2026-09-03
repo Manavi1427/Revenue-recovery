@@ -15,6 +15,11 @@ from integrations.payment_link_provider import (
 )
 from integrations.razorpay_payment_link import RazorpayTestPaymentLinkProvider
 from services.message_service import RecoveryMessage, generate_recovery_message
+from services.payment_health_service import (
+    PaymentHealthBatchNotFound, PaymentHealthDisabled, get_payment_health,
+)
+from payment_health_config import PaymentHealthConfigurationError
+from services.policy_service import apply_payment_health_policy
 from services.recovery_actions import RecoveryAction
 
 
@@ -136,6 +141,7 @@ def _configured_provider() -> PaymentLinkProvider:
 
 def execute_intervention(
     db: Session, intervention_id: str, provider: PaymentLinkProvider | None = None,
+    *, commit_changes: bool = True,
 ) -> ExecutionResult:
     """Execute one approved intervention with stopping checks and idempotency."""
 
@@ -148,6 +154,49 @@ def execute_intervention(
     if intervention.executed_at is not None and intervention.successful and intervention.result_payload:
         return _restore_result(case, intervention)
     action = _validate_pending(intervention, case)
+    try:
+        health = get_payment_health(db, case.batch_id)
+        method_health = next((
+            item for item in health["methods"]
+            if item["payment_method"] == (case.payment_method or "").lower()
+        ), None)
+    except (PaymentHealthDisabled, PaymentHealthBatchNotFound,
+            PaymentHealthConfigurationError):
+        method_health = None
+    health_policy = apply_payment_health_policy(
+        action, str(method_health["status"]) if method_health else None
+    )
+    if health_policy.affected:
+        now = datetime.now(timezone.utc)
+        intervention.cancelled_at = now
+        intervention.action_payload = {
+            **(intervention.action_payload or {}), "status": "SUPPRESSED"
+        }
+        case.status = RecoveryStatus.SUPPRESSED
+        details = {
+            "intervention_id": intervention.id,
+            "payment_method": case.payment_method,
+            "original_action": action.value,
+            "final_action": health_policy.final_action.value,
+            "reason": health_policy.reason,
+        }
+        db.add(AuditLog(
+            recovery_case_id=case.id,
+            action="INTERVENTION_SUPPRESSED_METHOD_DEGRADED", actor="SYSTEM",
+            previous_status=RecoveryStatus.ACTION_SCHEDULED,
+            new_status=RecoveryStatus.SUPPRESSED, decision_data=details,
+        ))
+        db.add(AuditLog(
+            recovery_case_id=case.id,
+            action="ALTERNATIVE_METHOD_RECOMMENDED", actor="SYSTEM",
+            previous_status=RecoveryStatus.ACTION_SCHEDULED,
+            new_status=RecoveryStatus.SUPPRESSED, decision_data=details,
+        ))
+        if commit_changes:
+            db.commit()
+        else:
+            db.flush()
+        raise ExecutionConflict(health_policy.reason)
     previous_status = case.status
     action_payload = dict(intervention.action_payload or {})
     action_payload["status"] = "IN_PROGRESS"
@@ -158,7 +207,10 @@ def execute_intervention(
         decision_data={"intervention_id": intervention.id, "action_type": action.value},
     ))
     # Commit the claim before a provider call so another request cannot start it again.
-    db.commit()
+    if commit_changes:
+        db.commit()
+    else:
+        db.flush()
 
     request = PaymentLinkRequest(case.id, intervention.id, case.amount, case.currency)
     try:
@@ -180,7 +232,10 @@ def execute_intervention(
             previous_status=case.status, new_status=case.status,
             decision_data={"intervention_id": intervention.id, "error_code": "PAYMENT_LINK_PROVIDER_ERROR"},
         ))
-        db.commit()
+        if commit_changes:
+            db.commit()
+        else:
+            db.flush()
         logger.warning("Payment-link provider failed for intervention %s: %s", intervention_id, type(exc).__name__)
         raise ExecutionProviderFailure("The payment link could not be created") from exc
 
@@ -196,7 +251,10 @@ def execute_intervention(
             previous_status=RecoveryStatus.RECOVERED, new_status=RecoveryStatus.RECOVERED,
             decision_data={"intervention_id": intervention.id, "reason": "CASE_RECOVERED_DURING_EXECUTION"},
         ))
-        db.commit()
+        if commit_changes:
+            db.commit()
+        else:
+            db.flush()
         raise ExecutionConflict("Case recovered during execution; message generation stopped")
     if case.status != RecoveryStatus.ACTION_SCHEDULED:
         db.rollback()
@@ -231,7 +289,10 @@ def execute_intervention(
             new_status=RecoveryStatus.CONTACTED if audit_action == "INTERVENTION_EXECUTED" else previous_status,
             decision_data=data,
         ))
-    db.commit()
+    if commit_changes:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(case)
     db.refresh(intervention)
     return ExecutionResult(case.id, case.status, intervention.id, action, link.provider, link.mode, link, message, False)

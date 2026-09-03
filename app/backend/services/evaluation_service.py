@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import logging
 
@@ -9,7 +9,13 @@ from sqlalchemy.orm import Session
 
 from database import AuditLog, Intervention, PaymentEvent, RecoveryCase, RecoveryStatus
 from services.decision_service import DecisionResult, select_recovery_action
-from services.policy_service import PolicyResult, evaluate_policy
+from services.payment_health_service import (
+    PaymentHealthBatchNotFound, PaymentHealthDisabled, get_payment_health,
+)
+from payment_health_config import PaymentHealthConfigurationError
+from services.policy_service import (
+    PolicyResult, apply_payment_health_policy, evaluate_policy,
+)
 from services.scoring_service import score_recovery_case
 
 
@@ -67,7 +73,10 @@ def _latest_score_source(db: Session, case_id: str) -> str:
     return str(log.decision_data.get("source", "SAVED")) if log else "SAVED"
 
 
-def evaluate_recovery_case(db: Session, case_id: str) -> EvaluationResult:
+def evaluate_recovery_case(
+    db: Session, case_id: str, *, commit_changes: bool = True,
+    method_health_by_method: dict[str, dict[str, object]] | None = None,
+) -> EvaluationResult:
     """Score if needed, decide, enforce policy, and schedule atomically."""
 
     case = db.scalar(select(RecoveryCase).where(RecoveryCase.id == case_id).with_for_update())
@@ -106,6 +115,58 @@ def evaluate_recovery_case(db: Session, case_id: str) -> EvaluationResult:
             previous_attempts=len(failed_events),
             intervention_count=len(counted_interventions),
         )
+        method = case.payment_method or getattr(latest_event, "payment_method", None)
+        if method_health_by_method is None:
+            try:
+                health_response = get_payment_health(db, case.batch_id)
+                method_health_by_method = {
+                    str(item["payment_method"]): item
+                    for item in health_response["methods"]
+                }
+            except (PaymentHealthDisabled, PaymentHealthBatchNotFound,
+                    PaymentHealthConfigurationError):
+                method_health_by_method = {}
+        health = method_health_by_method.get(str(method or "").lower())
+        health_policy = apply_payment_health_policy(
+            decision.selected_action,
+            str(health["status"]) if health else None,
+        )
+        if health_policy.affected:
+            decision = replace(
+                decision,
+                selected_action=health_policy.final_action,
+                operational_cost=50,
+                utility=decision.expected_recovery_value - 50
+                - decision.fatigue_penalty - decision.risk_penalty,
+                explanation=[
+                    *decision.explanation,
+                    health_policy.reason,
+                    "An alternative payment method was recommended.",
+                ],
+            )
+            case.recommended_action = health_policy.final_action.value
+            health_audit = {
+                "payment_method": method,
+                "health_status": health["status"] if health else None,
+                "observed_failure_rate": health.get("observed_failure_rate") if health else None,
+                "baseline_failure_rate": health.get("baseline_failure_rate") if health else None,
+                "threshold": health.get("threshold") if health else None,
+                "original_action": health_policy.original_action.value,
+                "final_action": health_policy.final_action.value,
+                "reason": health_policy.reason,
+            }
+            for action in (
+                "PAYMENT_METHOD_DEGRADED",
+                "PAYMENT_HEALTH_POLICY_CHECKED",
+                "INTERVENTION_SUPPRESSED_METHOD_DEGRADED",
+                "ALTERNATIVE_METHOD_RECOMMENDED",
+            ):
+                _add_audit_unless_identical(db, AuditLog(
+                    recovery_case_id=case.id,
+                    payment_event_id=latest_event.id if latest_event else None,
+                    action=action, actor="SYSTEM", previous_status=case.status,
+                    new_status=case.status, decision_data=health_audit,
+                ))
         existing = next((item for item in counted_interventions if
             item.action_type == decision.selected_action.value
             and item.executed_at is None and item.cancelled_at is None
@@ -119,10 +180,24 @@ def evaluate_recovery_case(db: Session, case_id: str) -> EvaluationResult:
                 previous_attempts=len(failed_events),
                 intervention_count=max(0, len(counted_interventions) - 1),
             )
+            replay_health_policy = apply_payment_health_policy(
+                decision.selected_action,
+                str(health["status"]) if health else None,
+            )
+            if replay_health_policy.affected:
+                decision = replace(
+                    decision,
+                    selected_action=replay_health_policy.final_action,
+                    operational_cost=50,
+                    utility=decision.expected_recovery_value - 50
+                    - decision.fatigue_penalty - decision.risk_penalty,
+                    explanation=[*decision.explanation, replay_health_policy.reason],
+                )
             policy = evaluate_policy(
                 case_status=case.status, selected_action=decision.selected_action,
                 recoverability_score=score, amount=case.amount,
                 intervention_count=len(counted_interventions), duplicate_pending=True,
+                experiment_group=case.experiment_group,
             )
             return EvaluationResult(case.id, case.status, score, score_source, decision, policy, existing)
 
@@ -139,6 +214,7 @@ def evaluate_recovery_case(db: Session, case_id: str) -> EvaluationResult:
             case_status=case.status, selected_action=decision.selected_action,
             recoverability_score=score, amount=case.amount,
             intervention_count=len(counted_interventions), duplicate_pending=False,
+            experiment_group=case.experiment_group,
         )
         case.status = policy.resulting_status
         _add_audit_unless_identical(db, AuditLog(
@@ -174,7 +250,10 @@ def evaluate_recovery_case(db: Session, case_id: str) -> EvaluationResult:
                 previous_status=previous_status, new_status=case.status,
                 decision_data={"intervention_id": intervention.id, "selected_action": decision.selected_action.value},
             ))
-        db.commit()
+        if commit_changes:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(case)
         if intervention is not None:
             db.refresh(intervention)

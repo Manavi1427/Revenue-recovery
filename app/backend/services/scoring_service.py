@@ -83,7 +83,9 @@ def calculate_rule_score(
     return RuleScoreResult(score=round(max(0.0, min(score, 1.0)), 6), explanation=reasons)
 
 
-def score_recovery_case(db: Session, case: RecoveryCase) -> ScoringResult:
+def score_recovery_case(
+    db: Session, case: RecoveryCase, *, commit_changes: bool = True
+) -> ScoringResult:
     """Score, persist, and audit a case without changing its lifecycle status."""
 
     events = db.scalars(
@@ -131,6 +133,9 @@ def score_recovery_case(db: Session, case: RecoveryCase) -> ScoringResult:
             previous_status=case.status, new_status=case.status,
             decision_data=decision_data,
         ))
-    db.commit()
+    if commit_changes:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(case)
     return result

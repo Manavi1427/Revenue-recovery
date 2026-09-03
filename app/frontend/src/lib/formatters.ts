@@ -3,3 +3,6 @@ export function formatDate(value?: string | null) { if (!value) return "—"; co
 export function formatScore(value?: number | null) { return value == null ? "Not scored" : `${Math.round(value * 100)}%`; }
 export function humanize(value?: string | null) { return value ? value.toLowerCase().replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) : "—"; }
 export function shortId(value: string) { return value.length > 14 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value; }
+export function formatRate(value?: number | null) { return value == null ? "—" : `${Math.round(value * 100)}%`; }
+export function formatLift(value?: number | null) { if (value == null) return "—"; const points = Math.round(value * 1000) / 10; return `${points > 0 ? "+" : ""}${points} percentage points`; }
+export function formatDuration(seconds?: number | null) { if (seconds == null) return "—"; const minutes = Math.round(seconds / 60); const hours = Math.floor(minutes / 60); const remainder = minutes % 60; return hours ? `${hours}h ${remainder}m` : `${minutes}m`; }
