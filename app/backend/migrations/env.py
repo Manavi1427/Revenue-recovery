@@ -11,6 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from database import Base
+from runtime_config import normalize_database_url
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -22,8 +23,8 @@ database_url = os.getenv("DATABASE_URL")
 if not database_url:
     raise RuntimeError("DATABASE_URL is not configured")
 
-config.set_main_option("sqlalchemy.url", database_url)
-target_metadata = None
+config.set_main_option("sqlalchemy.url", normalize_database_url(database_url).replace("%", "%%"))
+target_metadata = Base.metadata
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -38,7 +39,7 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
-target_metadata = None
+target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

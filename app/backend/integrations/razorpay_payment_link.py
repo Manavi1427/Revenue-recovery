@@ -11,7 +11,7 @@ from integrations.payment_link_provider import (
 
 
 class RazorpayTestPaymentLinkProvider:
-    """Create sanitized Payment Links using Razorpay Test Mode only."""
+    """sanitized Payment Links using Razorpay Test Mode only."""
 
     def __init__(self, key_id: str, key_secret: str, client: Any | None = None) -> None:
         if key_id.startswith("rzp_live_"):

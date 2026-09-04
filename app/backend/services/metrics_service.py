@@ -55,10 +55,13 @@ def calculate_overview_metrics(
         if treatment_rate is not None and holdout_rate is not None
         else None
     )
+    # Timestamp arithmetic is stable across databases that preserve or strip
+    # timezone metadata from otherwise equivalent UTC values.
     durations = [
-        (case.closed_at - case.opened_at).total_seconds()
+        case.closed_at.timestamp() - case.opened_at.timestamp()
         for case in recovered_cases
-        if case.closed_at is not None and case.closed_at >= case.opened_at
+        if case.closed_at is not None
+        and case.closed_at.timestamp() >= case.opened_at.timestamp()
     ]
 
     attempted = 0

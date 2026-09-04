@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: recoveriq-api
+    runtime: python
+    rootDir: app/backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /ready
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: RAZORPAY_MODE
+        value: mock
+      - key: MESSAGE_MODE
+        value: template
+      - key: DEMO_BATCH_ENABLED
+        value: true
+      - key: PAYMENT_HEALTH_ENABLED
+        value: true
+      - key: DATABASE_URL
+        sync: false
+      - key: FRONTEND_ORIGINS
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: BACKEND_PUBLIC_URL
+        sync: false

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from database import AuditLog, ExperimentGroup, PaymentEvent, RecoveryCase, RecoveryStatus
 from demo_batch_config import DemoBatchConfigurationError, get_demo_batch_settings
+from execution_config import get_execution_settings
 from payment_health_config import get_payment_health_settings
 from integrations.mock_payment_link import MockPaymentLinkProvider
 from schemas import DemoBatchRequest
@@ -195,6 +196,7 @@ def run_demo_batch(db: Session, request: DemoBatchRequest) -> dict[str, object]:
     specs = _case_specs(batch_id, request)
     cases: list[tuple[RecoveryCase, dict[str, object]]] = []
     try:
+        db.info["demo_batch_fast"] = True
         _add_background_successes(db, batch_id, specs)
         for spec in specs:
             payment = {
@@ -206,7 +208,7 @@ def run_demo_batch(db: Session, request: DemoBatchRequest) -> dict[str, object]:
             case = process_failed_payment(
                 db, str(spec["event_id"]), "payment.failed", payment, raw,
                 simulated_at=spec["failed_at"], commit_changes=False,
-                batch_id=batch_id,
+                batch_id=batch_id, assume_new=True,
             )
             case.batch_id = batch_id
             db.add(case)
@@ -230,7 +232,7 @@ def run_demo_batch(db: Session, request: DemoBatchRequest) -> dict[str, object]:
             db.add(AuditLog(recovery_case_id=case.id, action=action, actor="SIMULATOR", previous_status=case.status, new_status=case.status, decision_data=common))
         db.flush()
 
-        provider = MockPaymentLinkProvider("http://localhost:8000")
+        provider = MockPaymentLinkProvider(get_execution_settings().backend_public_url)
         health = get_payment_health(db, batch_id)
         health_by_method = {
             str(item["payment_method"]): item for item in health["methods"]
@@ -242,11 +244,15 @@ def run_demo_batch(db: Session, request: DemoBatchRequest) -> dict[str, object]:
             evaluation = evaluate_recovery_case(
                 db, case.id, commit_changes=False,
                 method_health_by_method=health_by_method,
+                known_case=case,
+                known_event=next(event for event in case.payment_events if event.event_type == "payment.failed"),
             )
             if evaluation.intervention is not None and evaluation.policy.allowed:
                 result = execute_intervention(
                     db, evaluation.intervention.id, provider=provider,
                     commit_changes=False,
+                    known_case=case, known_intervention=evaluation.intervention,
+                    method_health=health_by_method.get(str(case.payment_method or "").lower()),
                 )
                 if result.case_status == RecoveryStatus.CONTACTED:
                     successful_treatment.add(case.id)
@@ -269,7 +275,7 @@ def run_demo_batch(db: Session, request: DemoBatchRequest) -> dict[str, object]:
             recovered_at = spec["failed_at"] + timedelta(seconds=outcome_rng.randint(300, 43_200))
             payment = {"id": case.payment_id, "order_id": case.order_id, "amount": case.amount, "currency": case.currency}
             digest = hashlib.sha256(f"{batch_id}:{case.id}:captured".encode()).hexdigest()[:24]
-            process_successful_payment(db, f"evt_batch_captured_{digest}", "payment.captured", payment, {"event": "payment.captured", "demo": True, "batch_id": batch_id}, simulated_at=recovered_at, commit_changes=False, batch_id=batch_id)
+            process_successful_payment(db, f"evt_batch_captured_{digest}", "payment.captured", payment, {"event": "payment.captured", "demo": True, "batch_id": batch_id}, simulated_at=recovered_at, commit_changes=False, batch_id=batch_id, known_case=case)
             db.add(AuditLog(recovery_case_id=case.id, action=outcome_type, actor="SIMULATOR", previous_status=RecoveryStatus.RECOVERED, new_status=RecoveryStatus.RECOVERED, decision_data={"batch_id": batch_id, "failure_category": failure, "synthetic_probability": probability}))
         db.commit()
     except IntegrityError as exc:
@@ -280,4 +286,6 @@ def run_demo_batch(db: Session, request: DemoBatchRequest) -> dict[str, object]:
     except Exception:
         db.rollback()
         raise
+    finally:
+        db.info.pop("demo_batch_fast", None)
     return get_demo_batch(db, batch_id)

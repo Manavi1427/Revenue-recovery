@@ -141,11 +141,15 @@ def _configured_provider() -> PaymentLinkProvider:
 
 def execute_intervention(
     db: Session, intervention_id: str, provider: PaymentLinkProvider | None = None,
-    *, commit_changes: bool = True,
+    *, commit_changes: bool = True, known_case: RecoveryCase | None = None,
+    known_intervention: Intervention | None = None,
+    method_health: dict[str, object] | None = None,
 ) -> ExecutionResult:
     """Execute one approved intervention with stopping checks and idempotency."""
 
-    intervention, case = _load_locked(db, intervention_id)
+    intervention, case = ((known_intervention, known_case)
+                          if known_intervention is not None and known_case is not None
+                          else _load_locked(db, intervention_id))
     if case.status in {
         RecoveryStatus.RECOVERED, RecoveryStatus.EXHAUSTED,
         RecoveryStatus.SUPPRESSED, RecoveryStatus.HUMAN_REVIEW,
@@ -154,15 +158,12 @@ def execute_intervention(
     if intervention.executed_at is not None and intervention.successful and intervention.result_payload:
         return _restore_result(case, intervention)
     action = _validate_pending(intervention, case)
-    try:
-        health = get_payment_health(db, case.batch_id)
-        method_health = next((
-            item for item in health["methods"]
-            if item["payment_method"] == (case.payment_method or "").lower()
-        ), None)
-    except (PaymentHealthDisabled, PaymentHealthBatchNotFound,
-            PaymentHealthConfigurationError):
-        method_health = None
+    if method_health is None:
+        try:
+            health = get_payment_health(db, case.batch_id)
+            method_health = next((item for item in health["methods"] if item["payment_method"] == (case.payment_method or "").lower()), None)
+        except (PaymentHealthDisabled, PaymentHealthBatchNotFound, PaymentHealthConfigurationError):
+            method_health = None
     health_policy = apply_payment_health_policy(
         action, str(method_health["status"]) if method_health else None
     )
@@ -209,7 +210,7 @@ def execute_intervention(
     # Commit the claim before a provider call so another request cannot start it again.
     if commit_changes:
         db.commit()
-    else:
+    elif known_intervention is None:
         db.flush()
 
     request = PaymentLinkRequest(case.id, intervention.id, case.amount, case.currency)
@@ -239,8 +240,9 @@ def execute_intervention(
         logger.warning("Payment-link provider failed for intervention %s: %s", intervention_id, type(exc).__name__)
         raise ExecutionProviderFailure("The payment link could not be created") from exc
 
-    db.expire_all()
-    intervention, case = _load_locked(db, intervention_id)
+    if known_intervention is None or known_case is None:
+        db.expire_all()
+        intervention, case = _load_locked(db, intervention_id)
     if case.status == RecoveryStatus.RECOVERED:
         intervention.cancelled_at = datetime.now(timezone.utc)
         stopped_payload = dict(intervention.action_payload or {})
@@ -291,8 +293,9 @@ def execute_intervention(
         ))
     if commit_changes:
         db.commit()
-    else:
+    elif known_intervention is None:
         db.flush()
-    db.refresh(case)
-    db.refresh(intervention)
+    if commit_changes:
+        db.refresh(case)
+        db.refresh(intervention)
     return ExecutionResult(case.id, case.status, intervention.id, action, link.provider, link.mode, link, message, False)

@@ -4,7 +4,7 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from database import AuditLog, Intervention, PaymentEvent, RecoveryCase, RecoveryStatus
+from database import AuditLog, Intervention, PaymentEvent, RecoveryCase, RecoveryStatus, new_id
 from services.diagnosis_service import diagnose_payment_failure
 from services.scoring_service import score_recovery_case
 
@@ -77,8 +77,9 @@ def process_failed_payment(
     simulated_at: datetime | None = None,
     commit_changes: bool = True,
     batch_id: str | None = None,
+    assume_new: bool = False,
 ) -> RecoveryCase:
-    existing = db.scalar(select(PaymentEvent).where(PaymentEvent.event_id == event_id))
+    existing = None if assume_new else db.scalar(select(PaymentEvent).where(PaymentEvent.event_id == event_id))
     if existing:
         case = existing.recovery_case
         if case is None:
@@ -89,12 +90,16 @@ def process_failed_payment(
         event = _new_event(
             event_id, event_type, payment_data, raw_payload, simulated_at, batch_id
         )
+        if assume_new:
+            event.id = new_id()
         db.add(event)
-        db.flush()
+        if not assume_new:
+            db.flush()
 
-        case = _find_case(db, event.payment_id, event.order_id)
+        case = None if assume_new else _find_case(db, event.payment_id, event.order_id)
         if case is None:
             case = RecoveryCase(
+                id=new_id() if assume_new else None,
                 payment_id=event.payment_id,
                 order_id=event.order_id,
                 payment_method=event.payment_method,
@@ -104,7 +109,8 @@ def process_failed_payment(
                 opened_at=simulated_at or datetime.now(timezone.utc),
             )
             db.add(case)
-            db.flush()
+            if not assume_new:
+                db.flush()
             db.add(AuditLog(
                 recovery_case_id=case.id,
                 payment_event_id=event.id,
@@ -131,16 +137,19 @@ def process_failed_payment(
         ))
         if commit_changes:
             db.commit()
-        else:
+        elif not assume_new:
             db.flush()
-        db.refresh(case)
+        if commit_changes:
+            db.refresh(case)
         # Diagnosis is durable even if an unforeseen scoring persistence error occurs.
         try:
-            score_recovery_case(db, case, commit_changes=commit_changes)
+            score_recovery_case(db, case, commit_changes=commit_changes,
+                                known_event=event if assume_new else None)
         except Exception as exc:
             db.rollback()
             logger.warning("Recovery scoring failed after diagnosis: %s", type(exc).__name__)
-            db.refresh(case)
+            if commit_changes:
+                db.refresh(case)
         return case
     except Exception:
         db.rollback()
@@ -157,8 +166,9 @@ def process_successful_payment(
     simulated_at: datetime | None = None,
     commit_changes: bool = True,
     batch_id: str | None = None,
+    known_case: RecoveryCase | None = None,
 ) -> RecoveryCase | None:
-    existing = db.scalar(select(PaymentEvent).where(PaymentEvent.event_id == event_id))
+    existing = None if known_case is not None else db.scalar(select(PaymentEvent).where(PaymentEvent.event_id == event_id))
     if existing:
         return existing.recovery_case
 
@@ -168,7 +178,7 @@ def process_successful_payment(
         )
         db.add(event)
         db.flush()
-        case = _find_case(db, event.payment_id, event.order_id)
+        case = known_case or _find_case(db, event.payment_id, event.order_id)
         if case is None:
             if commit_changes:
                 db.commit()
@@ -209,7 +219,8 @@ def process_successful_payment(
             db.commit()
         else:
             db.flush()
-        db.refresh(case)
+        if commit_changes:
+            db.refresh(case)
         return case
     except Exception:
         db.rollback()

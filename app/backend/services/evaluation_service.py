@@ -7,7 +7,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from database import AuditLog, Intervention, PaymentEvent, RecoveryCase, RecoveryStatus
+from database import AuditLog, Intervention, PaymentEvent, RecoveryCase, RecoveryStatus, new_id
 from services.decision_service import DecisionResult, select_recovery_action
 from services.payment_health_service import (
     PaymentHealthBatchNotFound, PaymentHealthDisabled, get_payment_health,
@@ -57,6 +57,9 @@ def _policy_data(policy: PolicyResult) -> dict[str, object]:
 
 
 def _add_audit_unless_identical(db: Session, audit: AuditLog) -> None:
+    if db.info.get("demo_batch_fast"):
+        db.add(audit)
+        return
     latest = db.scalar(select(AuditLog).where(
         AuditLog.recovery_case_id == audit.recovery_case_id,
         AuditLog.action == audit.action,
@@ -76,15 +79,17 @@ def _latest_score_source(db: Session, case_id: str) -> str:
 def evaluate_recovery_case(
     db: Session, case_id: str, *, commit_changes: bool = True,
     method_health_by_method: dict[str, dict[str, object]] | None = None,
+    known_case: RecoveryCase | None = None,
+    known_event: PaymentEvent | None = None,
 ) -> EvaluationResult:
     """Score if needed, decide, enforce policy, and schedule atomically."""
 
-    case = db.scalar(select(RecoveryCase).where(RecoveryCase.id == case_id).with_for_update())
+    case = known_case or db.scalar(select(RecoveryCase).where(RecoveryCase.id == case_id).with_for_update())
     if case is None:
         raise EvaluationCaseNotFound(case_id)
 
     try:
-        score_source = _latest_score_source(db, case.id)
+        score_source = "SAVED" if known_event is not None else _latest_score_source(db, case.id)
         if case.recoverability_score is None and case.status in {
             RecoveryStatus.RECOVERED, RecoveryStatus.EXHAUSTED, RecoveryStatus.SUPPRESSED,
         }:
@@ -96,15 +101,19 @@ def evaluate_recovery_case(
         else:
             score = float(case.recoverability_score)
 
-        failed_events = db.scalars(select(PaymentEvent).where(
-            PaymentEvent.recovery_case_id == case.id,
-            PaymentEvent.event_type == "payment.failed",
-        ).order_by(PaymentEvent.occurred_at.desc())).all()
+        failed_events = [known_event] if known_event is not None else db.scalars(
+            select(PaymentEvent).where(
+                PaymentEvent.recovery_case_id == case.id,
+                PaymentEvent.event_type == "payment.failed",
+            ).order_by(PaymentEvent.occurred_at.desc())
+        ).all()
         latest_event = failed_events[0] if failed_events else None
-        counted_interventions = db.scalars(select(Intervention).where(
-            Intervention.recovery_case_id == case.id,
-            Intervention.cancelled_at.is_(None),
-        )).all()
+        counted_interventions = [] if known_event is not None else db.scalars(
+            select(Intervention).where(
+                Intervention.recovery_case_id == case.id,
+                Intervention.cancelled_at.is_(None),
+            )
+        ).all()
         decision = select_recovery_action(
             case_status=case.status,
             diagnosis=" ".join(filter(None, [case.diagnosis, getattr(latest_event, "error_reason", None), getattr(latest_event, "error_step", None)])),
@@ -228,6 +237,7 @@ def evaluate_recovery_case(
         intervention = None
         if policy.allowed:
             intervention = Intervention(
+                id=new_id() if known_event is not None else None,
                 recovery_case_id=case.id,
                 action_type=decision.selected_action.value,
                 channel="PENDING",
@@ -242,7 +252,8 @@ def evaluate_recovery_case(
                 },
             )
             db.add(intervention)
-            db.flush()
+            if known_event is None:
+                db.flush()
             db.add(AuditLog(
                 recovery_case_id=case.id,
                 payment_event_id=latest_event.id if latest_event else None,
@@ -252,11 +263,12 @@ def evaluate_recovery_case(
             ))
         if commit_changes:
             db.commit()
-        else:
+        elif known_event is None:
             db.flush()
-        db.refresh(case)
-        if intervention is not None:
-            db.refresh(intervention)
+        if commit_changes:
+            db.refresh(case)
+            if intervention is not None:
+                db.refresh(intervention)
         return EvaluationResult(case.id, case.status, score, score_source, decision, policy, intervention)
     except Exception:
         db.rollback()

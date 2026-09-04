@@ -84,11 +84,12 @@ def calculate_rule_score(
 
 
 def score_recovery_case(
-    db: Session, case: RecoveryCase, *, commit_changes: bool = True
+    db: Session, case: RecoveryCase, *, commit_changes: bool = True,
+    known_event: PaymentEvent | None = None,
 ) -> ScoringResult:
     """Score, persist, and audit a case without changing its lifecycle status."""
 
-    events = db.scalars(
+    events = [known_event] if known_event is not None else db.scalars(
         select(PaymentEvent).where(PaymentEvent.recovery_case_id == case.id).order_by(PaymentEvent.occurred_at.desc())
     ).all()
     failed_events = [event for event in events if event.event_type == "payment.failed"]
@@ -121,7 +122,7 @@ def score_recovery_case(
         "dataset_type": "synthetic",
     }
     case.recoverability_score = result.final_score
-    latest = db.scalar(select(AuditLog).where(
+    latest = None if known_event is not None else db.scalar(select(AuditLog).where(
         AuditLog.recovery_case_id == case.id, AuditLog.action == "RECOVERY_SCORED"
     ).order_by(AuditLog.created_at.desc()))
     # Avoid audit noise only when the complete scoring decision is unchanged.
@@ -135,7 +136,8 @@ def score_recovery_case(
         ))
     if commit_changes:
         db.commit()
-    else:
+    elif known_event is None:
         db.flush()
-    db.refresh(case)
+    if commit_changes:
+        db.refresh(case)
     return result

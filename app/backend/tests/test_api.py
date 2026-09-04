@@ -37,3 +37,23 @@ def test_webhook_duplicate_event(client, db):
     second = client.post("/webhooks/razorpay", content=body, headers=headers)
     assert first.status_code == second.status_code == 200
     assert first.json()["case_id"] == second.json()["case_id"]
+
+
+def test_health_is_sanitized_with_rule_fallback(client, monkeypatch):
+    monkeypatch.setattr("main.get_model_status", lambda: {"model_available": False})
+    response = client.get("/health")
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["model_status"] == "rules_fallback"
+    assert not ({"database_url", "key", "secret"} & payload.keys())
+
+
+def test_ready_sanitizes_database_failure(client, monkeypatch):
+    class BrokenEngine:
+        def connect(self):
+            raise RuntimeError("private database detail")
+
+    monkeypatch.setattr("main.engine", BrokenEngine())
+    response = client.get("/ready")
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "service": "recoveriq-api", "database": "unavailable"}
