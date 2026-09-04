@@ -13,5 +13,3 @@ __pycache__/
 *.stdout.log
 *.stderr.log
 
-#file packages
-*alembic.ini
